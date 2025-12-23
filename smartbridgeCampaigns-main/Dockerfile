@@ -26,6 +26,8 @@ RUN npm ci
 # Copy built artifacts
 COPY --from=builder /app/dist ./dist
 COPY --from=builder /app/shared ./shared
+COPY --from=builder /app/scripts ./scripts
+COPY --from=builder /app/db ./db
 COPY --from=builder /app/drizzle.config.ts ./
 
 # Expose port
