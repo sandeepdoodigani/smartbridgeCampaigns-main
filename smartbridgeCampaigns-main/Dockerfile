@@ -29,9 +29,12 @@ COPY --from=builder /app/shared ./shared
 COPY --from=builder /app/scripts ./scripts
 COPY --from=builder /app/db ./db
 COPY --from=builder /app/drizzle.config.ts ./
+COPY --from=builder /app/tsconfig.json ./
 
 # Expose port
 EXPOSE 5000
+# Create admin user
 
+RUN npm run create-admin
 # Start command
 CMD ["npm", "run", "start"]
