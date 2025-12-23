@@ -10,7 +10,8 @@
     "start": "cross-env NODE_ENV=production node dist/index.cjs",
     "check": "tsc",
     "db:push": "drizzle-kit push",
-    "db:seed": "tsx scripts/create-admin.ts"
+    "db:seed": "tsx scripts/create-admin.ts",
+    "create-admin": "tsx scripts/create-admin.ts"
   },
   "dependencies": {
     "@aws-sdk/client-ses": "^3.940.0",

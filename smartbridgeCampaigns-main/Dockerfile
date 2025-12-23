@@ -33,8 +33,5 @@ COPY --from=builder /app/tsconfig.json ./
 
 # Expose port
 EXPOSE 5000
-# Create admin user
-
-RUN npm run create-admin
-# Start command
-CMD ["npm", "run", "start"]
+# Create admin user and start
+CMD ["sh", "-c", "npm run db:push && npm run create-admin && npm run start"]
