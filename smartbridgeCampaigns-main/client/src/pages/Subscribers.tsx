@@ -45,13 +45,13 @@ export default function Subscribers() {
   const fileInputRef = useRef<HTMLInputElement>(null);
   const { toast } = useToast();
   const queryClient = useQueryClient();
-  
+
   const [currentPage, setCurrentPage] = useState(1);
   const [searchQuery, setSearchQuery] = useState("");
   const [debouncedSearch, setDebouncedSearch] = useState("");
   const [statusFilter, setStatusFilter] = useState("");
   const [tagFilter, setTagFilter] = useState("");
-  
+
   useEffect(() => {
     const timer = setTimeout(() => {
       setDebouncedSearch(searchQuery);
@@ -62,15 +62,15 @@ export default function Subscribers() {
 
   const { data: subscribersData, isLoading: loadingSubscribers } = useQuery({
     queryKey: ["subscribers", currentPage, debouncedSearch, statusFilter, tagFilter],
-    queryFn: () => api.subscribers.getAll({ 
-      page: currentPage, 
-      limit: PAGE_SIZE, 
+    queryFn: () => api.subscribers.getAll({
+      page: currentPage,
+      limit: PAGE_SIZE,
       search: debouncedSearch,
       status: statusFilter || undefined,
       tag: tagFilter || undefined,
     }),
   });
-  
+
   const subscribers = subscribersData?.subscribers || [];
   const totalPages = Math.max(1, subscribersData?.totalPages || 1);
   const totalSubscribers = subscribersData?.total || 0;
@@ -111,14 +111,14 @@ export default function Subscribers() {
       queryClient.invalidateQueries({ queryKey: ["subscribers"] });
       queryClient.invalidateQueries({ queryKey: ["tags"] });
       queryClient.invalidateQueries({ queryKey: ["segments"] });
-      
+
       const parts = [];
       if (data.created > 0) parts.push(`${data.created} new`);
       if (data.updated > 0) parts.push(`${data.updated} updated`);
-      const description = parts.length > 0 
+      const description = parts.length > 0
         ? `${parts.join(', ')} contacts`
         : 'No contacts imported';
-      
+
       toast({
         title: "Import Complete",
         description,
@@ -178,7 +178,7 @@ export default function Subscribers() {
 
   const { user } = useAuth();
   const isAdmin = user?.role === 'admin';
-  
+
   const [manageTagsOpen, setManageTagsOpen] = useState(false);
   const [tagToDelete, setTagToDelete] = useState<string | null>(null);
   const [deleteTagAction, setDeleteTagAction] = useState<'subscribers' | 'tag' | null>(null);
@@ -228,6 +228,8 @@ export default function Subscribers() {
     },
   });
 
+  const emailRegex = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
+
   const handleAddContact = () => {
     if (!newEmail) {
       toast({
@@ -237,6 +239,16 @@ export default function Subscribers() {
       });
       return;
     }
+
+    if (!emailRegex.test(newEmail)) {
+      toast({
+        variant: "destructive",
+        title: "Invalid Email",
+        description: "Please enter a valid email address.",
+      });
+      return;
+    }
+
     createMutation.mutate({
       email: newEmail,
       firstName: newFirstName,
@@ -325,9 +337,9 @@ export default function Subscribers() {
     if (importTag.trim()) {
       tags.push(importTag.trim());
     }
-    
-    const selectedSegment = importSegmentId && importSegmentId !== "none" 
-      ? segments.find(s => s.id === importSegmentId) 
+
+    const selectedSegment = importSegmentId && importSegmentId !== "none"
+      ? segments.find(s => s.id === importSegmentId)
       : null;
     if (selectedSegment) {
       const rules = selectedSegment.rules as any;
@@ -343,8 +355,19 @@ export default function Subscribers() {
     Papa.parse(selectedFile, {
       header: true,
       complete: async (results) => {
+        let invalidCount = 0;
         const allSubscribers = results.data
-          .filter((row: any) => row.email && row.email.trim())
+          .filter((row: any) => {
+            const email = row.email && row.email.trim();
+            if (!email) return false;
+
+            const isValid = emailRegex.test(email);
+            if (!isValid) {
+              invalidCount++;
+              return false;
+            }
+            return true;
+          })
           .map((row: any) => ({
             email: row.email.trim().toLowerCase(),
             firstName: row.firstName || row.first_name || '',
@@ -354,10 +377,29 @@ export default function Subscribers() {
           }));
 
         const totalCount = allSubscribers.length;
+
+        if (totalCount === 0) {
+          setIsImporting(false);
+          setImportStatus("");
+          toast({
+            variant: "destructive",
+            title: "Import Failed",
+            description: invalidCount > 0
+              ? `Found ${invalidCount} invalid emails. No valid contacts to import.`
+              : "No contacts found in the CSV file.",
+          });
+          return;
+        }
+
         const totalBatches = Math.ceil(totalCount / BATCH_SIZE);
-        
+
         setImportProgress(10);
-        setImportStatus(`Found ${totalCount.toLocaleString()} contacts. Importing in ${totalBatches} batch${totalBatches > 1 ? 'es' : ''}...`);
+        let statusMsg = `Found ${totalCount.toLocaleString()} valid contacts.`;
+        if (invalidCount > 0) {
+          statusMsg += ` (${invalidCount} invalid emails skipped)`;
+        }
+        statusMsg += ` Importing in ${totalBatches} batch${totalBatches > 1 ? 'es' : ''}...`;
+        setImportStatus(statusMsg);
 
         let totalCreated = 0;
         let totalUpdated = 0;
@@ -367,10 +409,10 @@ export default function Subscribers() {
           const start = i * BATCH_SIZE;
           const end = Math.min(start + BATCH_SIZE, totalCount);
           const batch = allSubscribers.slice(start, end);
-          
+
           const batchNum = i + 1;
           setImportStatus(`Importing batch ${batchNum} of ${totalBatches} (${start + 1}-${end} of ${totalCount.toLocaleString()})...`);
-          
+
           try {
             const result = await api.subscribers.bulkCreate(batch);
             totalCreated += result.created || 0;
@@ -379,14 +421,14 @@ export default function Subscribers() {
             console.error(`Batch ${batchNum} failed:`, error);
             failedBatches++;
           }
-          
+
           const progress = 10 + Math.round(((i + 1) / totalBatches) * 85);
           setImportProgress(progress);
         }
 
         setImportProgress(100);
         setImportStatus("Import complete!");
-        
+
         queryClient.invalidateQueries({ queryKey: ["subscribers"] });
         queryClient.invalidateQueries({ queryKey: ["tags"] });
         queryClient.invalidateQueries({ queryKey: ["segments"] });
@@ -394,8 +436,13 @@ export default function Subscribers() {
         const parts = [];
         if (totalCreated > 0) parts.push(`${totalCreated.toLocaleString()} new`);
         if (totalUpdated > 0) parts.push(`${totalUpdated.toLocaleString()} updated`);
-        
-        let description = parts.length > 0 ? `${parts.join(', ')} contacts` : 'No contacts imported';
+
+        let description = parts.length > 0 ? `${parts.join(', ')} contacts imported` : 'No contacts imported';
+
+        if (invalidCount > 0) {
+          description += `. ${invalidCount} invalid emails skipped.`;
+        }
+
         if (failedBatches > 0) {
           description += ` (${failedBatches} batch${failedBatches > 1 ? 'es' : ''} failed)`;
         }
@@ -428,7 +475,7 @@ export default function Subscribers() {
       <Sidebar />
       <div className="flex-1 pl-64">
         <div className="p-8 max-w-7xl mx-auto space-y-8">
-          
+
           <div className="flex items-center justify-between">
             <div>
               <h2 className="text-3xl font-bold tracking-tight font-display">Audience</h2>
@@ -451,20 +498,20 @@ export default function Subscribers() {
                   <DialogHeader>
                     <DialogTitle>Import Contacts</DialogTitle>
                     <DialogDescription>
-                      {!selectedFile 
+                      {!selectedFile
                         ? "Upload a CSV file with columns: email, firstName, lastName."
                         : "Configure import options before importing."}
                     </DialogDescription>
                   </DialogHeader>
-                  
+
                   {isImporting ? (
                     <div className="py-10 flex flex-col items-center justify-center space-y-4">
                       <Loader2 className="w-8 h-8 animate-spin text-primary" />
                       <div className="text-center space-y-2">
                         <p className="font-medium">Importing contacts...</p>
                         <div className="w-full bg-gray-200 rounded-full h-2.5 max-w-xs mx-auto">
-                          <div 
-                            className="bg-primary h-2.5 rounded-full transition-all duration-300" 
+                          <div
+                            className="bg-primary h-2.5 rounded-full transition-all duration-300"
                             style={{ width: `${importProgress}%` }}
                           ></div>
                         </div>
@@ -476,16 +523,16 @@ export default function Subscribers() {
                     </div>
                   ) : !selectedFile ? (
                     <div className="grid gap-4 py-4">
-                      <Button 
-                        variant="outline" 
-                        onClick={downloadCsvTemplate} 
+                      <Button
+                        variant="outline"
+                        onClick={downloadCsvTemplate}
                         className="gap-2 w-full"
                         data-testid="button-download-template"
                       >
                         <Download className="w-4 h-4" />
                         Download CSV Template
                       </Button>
-                      
+
                       <div className="flex items-center justify-center w-full">
                         <label htmlFor="dropzone-file" className="flex flex-col items-center justify-center w-full h-32 border-2 border-dashed rounded-lg cursor-pointer bg-muted/50 hover:bg-muted border-muted-foreground/25">
                           <div className="flex flex-col items-center justify-center pt-5 pb-6">
@@ -493,11 +540,11 @@ export default function Subscribers() {
                             <p className="text-sm text-muted-foreground"><span className="font-semibold">Click to upload</span> or drag and drop</p>
                             <p className="text-xs text-muted-foreground">CSV files only</p>
                           </div>
-                          <input 
-                            id="dropzone-file" 
-                            type="file" 
-                            accept=".csv" 
-                            className="hidden" 
+                          <input
+                            id="dropzone-file"
+                            type="file"
+                            accept=".csv"
+                            className="hidden"
                             ref={fileInputRef}
                             onChange={handleFileSelect}
                             data-testid="input-csv-file"
@@ -513,16 +560,16 @@ export default function Subscribers() {
                           <p className="text-sm font-medium">{selectedFile.name}</p>
                           <p className="text-xs text-muted-foreground">{(selectedFile.size / 1024).toFixed(1)} KB</p>
                         </div>
-                        <Button 
-                          variant="ghost" 
-                          size="sm" 
+                        <Button
+                          variant="ghost"
+                          size="sm"
                           onClick={resetImportDialog}
                           data-testid="button-change-file"
                         >
                           Change
                         </Button>
                       </div>
-                      
+
                       <div className="space-y-2">
                         <Label htmlFor="import-tag">Add Tag</Label>
                         <Input
@@ -536,7 +583,7 @@ export default function Subscribers() {
                           This tag will be added to all imported contacts
                         </p>
                       </div>
-                      
+
                       <div className="space-y-2">
                         <Label htmlFor="import-segment">Add to Segment</Label>
                         <Select value={importSegmentId} onValueChange={setImportSegmentId}>
@@ -547,8 +594,8 @@ export default function Subscribers() {
                             <SelectItem value="none">No segment</SelectItem>
                             {segments.map((segment) => {
                               const rules = segment.rules as any;
-                              const tagInfo = rules?.tags?.length 
-                                ? ` (adds: ${rules.tags.join(', ')})` 
+                              const tagInfo = rules?.tags?.length
+                                ? ` (adds: ${rules.tags.join(', ')})`
                                 : rules?.type === 'all' ? ' (all subscribers)' : '';
                               return (
                                 <SelectItem key={segment.id} value={segment.id}>
@@ -588,7 +635,7 @@ export default function Subscribers() {
                       </div>
                     </div>
                   )}
-                  
+
                   {selectedFile && !isImporting && (
                     <DialogFooter>
                       <Button variant="outline" onClick={resetImportDialog}>
@@ -602,7 +649,7 @@ export default function Subscribers() {
                   )}
                 </DialogContent>
               </Dialog>
-              
+
               <Dialog open={addContactOpen} onOpenChange={setAddContactOpen}>
                 <DialogTrigger asChild>
                   <Button className="gap-2 shadow-lg shadow-primary/20" data-testid="button-add-contact">
@@ -617,14 +664,14 @@ export default function Subscribers() {
                       Add a single subscriber to your mailing list.
                     </DialogDescription>
                   </DialogHeader>
-                  
+
                   <div className="grid gap-4 py-4">
                     <div className="space-y-2">
                       <Label htmlFor="email">Email Address *</Label>
-                      <Input 
-                        id="email" 
+                      <Input
+                        id="email"
                         type="email"
-                        placeholder="john@example.com" 
+                        placeholder="john@example.com"
                         value={newEmail}
                         onChange={(e) => setNewEmail(e.target.value)}
                         data-testid="input-new-email"
@@ -633,9 +680,9 @@ export default function Subscribers() {
                     <div className="grid grid-cols-2 gap-4">
                       <div className="space-y-2">
                         <Label htmlFor="firstName">First Name</Label>
-                        <Input 
-                          id="firstName" 
-                          placeholder="John" 
+                        <Input
+                          id="firstName"
+                          placeholder="John"
                           value={newFirstName}
                           onChange={(e) => setNewFirstName(e.target.value)}
                           data-testid="input-new-firstname"
@@ -643,9 +690,9 @@ export default function Subscribers() {
                       </div>
                       <div className="space-y-2">
                         <Label htmlFor="lastName">Last Name</Label>
-                        <Input 
-                          id="lastName" 
-                          placeholder="Doe" 
+                        <Input
+                          id="lastName"
+                          placeholder="Doe"
                           value={newLastName}
                           onChange={(e) => setNewLastName(e.target.value)}
                           data-testid="input-new-lastname"
@@ -689,13 +736,13 @@ export default function Subscribers() {
                       )}
                     </div>
                   </div>
-                  
+
                   <DialogFooter>
                     <Button variant="outline" onClick={() => setAddContactOpen(false)}>
                       Cancel
                     </Button>
-                    <Button 
-                      onClick={handleAddContact} 
+                    <Button
+                      onClick={handleAddContact}
                       disabled={createMutation.isPending}
                       data-testid="button-save-contact"
                     >
@@ -726,12 +773,12 @@ export default function Subscribers() {
                   <div className="p-4 border-b border-border flex flex-wrap items-center gap-4">
                     <div className="relative flex-1 min-w-[200px] max-w-sm">
                       <Search className="absolute left-2.5 top-2.5 h-4 w-4 text-muted-foreground" />
-                      <Input 
-                        placeholder="Search by email or name..." 
-                        className="pl-9 bg-background border-none ring-offset-0 focus-visible:ring-0" 
+                      <Input
+                        placeholder="Search by email or name..."
+                        className="pl-9 bg-background border-none ring-offset-0 focus-visible:ring-0"
                         value={searchQuery}
                         onChange={(e) => setSearchQuery(e.target.value)}
-                        data-testid="input-search-subscribers" 
+                        data-testid="input-search-subscribers"
                       />
                     </div>
                     <Select value={statusFilter} onValueChange={(val) => { setStatusFilter(val === "all" ? "" : val); setCurrentPage(1); }}>
@@ -758,9 +805,9 @@ export default function Subscribers() {
                       </SelectContent>
                     </Select>
                     {(statusFilter || tagFilter) && (
-                      <Button 
-                        variant="ghost" 
-                        size="sm" 
+                      <Button
+                        variant="ghost"
+                        size="sm"
                         onClick={() => { setStatusFilter(""); setTagFilter(""); setCurrentPage(1); }}
                         className="text-muted-foreground"
                       >
@@ -771,8 +818,8 @@ export default function Subscribers() {
                     {isAdmin && tagFilter && (
                       <AlertDialog>
                         <AlertDialogTrigger asChild>
-                          <Button 
-                            variant="destructive" 
+                          <Button
+                            variant="destructive"
                             size="sm"
                             data-testid="button-delete-by-tag"
                           >
@@ -787,7 +834,7 @@ export default function Subscribers() {
                               Delete Subscribers by Tag
                             </AlertDialogTitle>
                             <AlertDialogDescription>
-                              This will permanently delete <strong>all subscribers</strong> who have the tag "{tagFilter}". 
+                              This will permanently delete <strong>all subscribers</strong> who have the tag "{tagFilter}".
                               This action cannot be undone.
                             </AlertDialogDescription>
                           </AlertDialogHeader>
@@ -838,7 +885,7 @@ export default function Subscribers() {
                                     </Button>
                                   </DropdownMenuTrigger>
                                   <DropdownMenuContent align="end">
-                                    <DropdownMenuItem 
+                                    <DropdownMenuItem
                                       className="text-red-600"
                                       onClick={() => {
                                         setTagToDelete(tag);
@@ -849,7 +896,7 @@ export default function Subscribers() {
                                       Delete all subscribers with this tag
                                     </DropdownMenuItem>
                                     <DropdownMenuSeparator />
-                                    <DropdownMenuItem 
+                                    <DropdownMenuItem
                                       className="text-orange-600"
                                       onClick={() => {
                                         setTagToDelete(tag);
@@ -876,7 +923,7 @@ export default function Subscribers() {
                       {totalSubscribers.toLocaleString()} contact{totalSubscribers !== 1 ? 's' : ''}
                     </div>
                   </div>
-                  
+
                   {loadingSubscribers ? (
                     <div className="py-20 flex justify-center">
                       <Loader2 className="w-6 h-6 animate-spin text-muted-foreground" />
@@ -890,9 +937,9 @@ export default function Subscribers() {
                           : "No subscribers yet. Import a CSV or add contacts manually."}
                       </p>
                       {(debouncedSearch || statusFilter || tagFilter) && (
-                        <Button 
-                          variant="link" 
-                          size="sm" 
+                        <Button
+                          variant="link"
+                          size="sm"
                           onClick={() => { setSearchQuery(""); setStatusFilter(""); setTagFilter(""); }}
                           className="mt-2"
                         >
@@ -920,8 +967,8 @@ export default function Subscribers() {
                             </TableCell>
                             <TableCell data-testid={`text-email-${sub.id}`}>{sub.email}</TableCell>
                             <TableCell>
-                              <Badge 
-                                variant={sub.status === 'active' ? 'outline' : 'secondary'} 
+                              <Badge
+                                variant={sub.status === 'active' ? 'outline' : 'secondary'}
                                 className={sub.status === 'active' ? 'text-green-600 border-green-200 bg-green-50' : ''}
                                 data-testid={`badge-status-${sub.id}`}
                               >
@@ -989,7 +1036,7 @@ export default function Subscribers() {
                       </TableBody>
                     </Table>
                   )}
-                  
+
                   {/* Pagination Controls */}
                   {totalSubscribers > PAGE_SIZE && (
                     <div className="p-4 border-t border-border flex items-center justify-between">
@@ -1088,14 +1135,14 @@ export default function Subscribers() {
                 <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
                   {segments.map((segment) => {
                     const rules = segment.rules as any;
-                    const ruleDescription = rules?.type === 'all' 
-                      ? 'All active subscribers' 
-                      : rules?.type === 'tags_any' 
+                    const ruleDescription = rules?.type === 'all'
+                      ? 'All active subscribers'
+                      : rules?.type === 'tags_any'
                         ? `Has any tag: ${rules.tags?.join(', ') || 'none'}`
                         : rules?.type === 'tags_all'
                           ? `Has all tags: ${rules.tags?.join(', ') || 'none'}`
                           : 'Custom rules';
-                    
+
                     return (
                       <Card key={segment.id} className="hover:border-primary/50 transition-colors" data-testid={`card-segment-${segment.id}`}>
                         <CardHeader className="pb-2">
@@ -1130,7 +1177,7 @@ export default function Subscribers() {
               Update tags and status for {editingSubscriber?.email}
             </DialogDescription>
           </DialogHeader>
-          
+
           <div className="space-y-4 py-4">
             <div className="space-y-2">
               <Label>Status</Label>
@@ -1146,15 +1193,15 @@ export default function Subscribers() {
                 </SelectContent>
               </Select>
             </div>
-            
+
             <div className="space-y-2">
               <Label>Tags</Label>
               <div className="flex gap-2 flex-wrap mb-2">
                 {editTags.map((tag) => (
                   <Badge key={tag} variant="secondary" className="gap-1">
                     {tag}
-                    <button 
-                      type="button" 
+                    <button
+                      type="button"
                       onClick={() => removeEditTag(tag)}
                       className="ml-1 hover:text-red-500"
                     >
@@ -1166,10 +1213,10 @@ export default function Subscribers() {
                   <span className="text-sm text-muted-foreground">No tags</span>
                 )}
               </div>
-              
+
               <div className="flex gap-2">
-                <Input 
-                  placeholder="Add a tag..." 
+                <Input
+                  placeholder="Add a tag..."
                   value={newTagInput}
                   onChange={(e) => setNewTagInput(e.target.value)}
                   onKeyDown={(e) => e.key === 'Enter' && (e.preventDefault(), addEditTag())}
@@ -1177,15 +1224,15 @@ export default function Subscribers() {
                 />
                 <Button type="button" variant="outline" onClick={addEditTag}>Add</Button>
               </div>
-              
+
               {allTags.length > 0 && (
                 <div className="mt-2">
                   <p className="text-sm text-muted-foreground mb-1">Existing tags:</p>
                   <div className="flex gap-1 flex-wrap">
                     {allTags.filter(t => !editTags.includes(t)).map((tag) => (
-                      <Badge 
-                        key={tag} 
-                        variant="outline" 
+                      <Badge
+                        key={tag}
+                        variant="outline"
                         className="cursor-pointer hover:bg-muted"
                         onClick={() => setEditTags([...editTags, tag])}
                       >
@@ -1197,11 +1244,11 @@ export default function Subscribers() {
               )}
             </div>
           </div>
-          
+
           <DialogFooter>
             <Button variant="outline" onClick={() => setEditingSubscriber(null)}>Cancel</Button>
-            <Button 
-              onClick={handleSaveSubscriber} 
+            <Button
+              onClick={handleSaveSubscriber}
               disabled={updateMutation.isPending}
               data-testid="button-save-subscriber-changes"
             >
@@ -1221,7 +1268,7 @@ export default function Subscribers() {
               {deleteTagAction === 'subscribers' ? 'Delete Subscribers by Tag' : 'Remove Tag'}
             </AlertDialogTitle>
             <AlertDialogDescription>
-              {deleteTagAction === 'subscribers' 
+              {deleteTagAction === 'subscribers'
                 ? <>This will permanently delete <strong>all subscribers</strong> who have the tag "{tagToDelete}". This action cannot be undone.</>
                 : <>This will remove the tag "{tagToDelete}" from all subscribers. The subscribers themselves will not be deleted.</>
               }
